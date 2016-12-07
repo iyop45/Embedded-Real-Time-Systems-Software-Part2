@@ -46,6 +46,10 @@
 #include "OLED.h"
 #include "WavPlayer.h"
 
+extern const uint8_t cantinaBandSample[];
+extern const uint32_t cantinaBandSampleLength;
+#include "cantinaBandSample.h"
+
 /******************************************************************************
  * Global variables
  *****************************************************************************/
@@ -313,7 +317,7 @@ static void TuneTask(void *pvParameters)
 int gridLocation[2] = {0, 0};
 enum movements {LEFT, RIGHT, FORWARDS, BACKWARDS};
 enum movements joystickCommands[20];
-uint8_t queueIndex = 0;
+uint8_t joystickIndex = 0;
 
 uint8_t isCenterJoystickPressed = 0;
 uint8_t isReadyToMove = 0;
@@ -331,26 +335,26 @@ static void JoystickTask(void *pvParameters)
 
 	for(;;)
 	{
-		if(readyToMove == 0){
+		if(isReadyToMove == 0){
 			// Joystick Up
 			if (((GPIO_ReadValue(2) >> 3) & 0x01) == 0){
-				joystickCommands[i] = FORWARDS;
-				queueIndex++;
+				joystickCommands[joystickIndex] = FORWARDS;
+				joystickIndex++;
 
 			// Joystick Down
 			}else if(((GPIO_ReadValue(0) >> 15) & 0x01) == 0){
-				joystickCommands[i] = BACKWARDS;
-				queueIndex++;
+				joystickCommands[joystickIndex] = BACKWARDS;
+				joystickIndex++;
 
 			// Joystick Left
 			}else if(((GPIO_ReadValue(2) >> 4) & 0x01) == 0){
-				joystickCommands[i] = LEFT;
-				queueIndex++;
+				joystickCommands[joystickIndex] = LEFT;
+				joystickIndex++;
 
 			// Joystick Right
 			}else if(((GPIO_ReadValue(0) >> 16) & 0x01) == 0){
-				joystickCommands[i] = RIGHT;
-				queueIndex++;
+				joystickCommands[joystickIndex] = RIGHT;
+				joystickIndex++;
 
 			// Joystick Center
 			}else if(((GPIO_ReadValue(0) >> 17) & 0x01) == 0){
@@ -363,19 +367,20 @@ static void JoystickTask(void *pvParameters)
 	}
 }
 
-enum actions {CLOCKWISE, ANTICLOCKWISE, FORWARDS, BACKWARDS};
-
+enum actions {CLOCKWISE, ANTICLOCKWISE, FWD, BKWD};
 
 struct motorInstruction {
-	actions action_type; // Either a rotation or a movement
+	enum actions action_type; // Either a rotation or a movement
 	int magnitude; // Distance or angle depending on action type
 };
 
-motorInstruction queuedMotorInstructions[];
+int finalGridPosition[2] = {0, 0};
+struct motorInstruction queuedMotorInstructions[4];
+uint8_t motorInstructionIndex = 0;
 /******************************************************************************
  * Description:	Movement control. This task creates the movement objects required to reach the destination
  *****************************************************************************/
-static void MovementControlTask(void *pvParameters)
+static void RoutingTask(void *pvParameters)
 {
 	const portTickType TaskPeriodms =10UL / portTICK_RATE_MS;
 	(void)pvParameters;
@@ -393,9 +398,13 @@ static void MovementControlTask(void *pvParameters)
 	for(;;)
 	{
 		if(isCenterJoystickPressed == 1 && isReadyToMove != 1){
-			finalGridPosition = gridLocation; // Reset expected grid position
-			for(uint8_t i; i < sizeof(joystickCommands); i++){
-				switch(joystickCommands[i]){
+			// Reset expected grid position
+			finalGridPosition[X] = gridLocation[X];
+			finalGridPosition[Y] = gridLocation[Y];
+
+			uint8_t i;
+			for(i = 0; i < sizeof(joystickCommands); i++){
+				switch(joystickCommands[motorInstructionIndex]){
 					case FORWARDS:
 						finalGridPosition[Y]++;
 						break;
@@ -418,51 +427,61 @@ static void MovementControlTask(void *pvParameters)
 				// Rotate right 90 degrees
 				a1.action_type = CLOCKWISE;
 				a1.magnitude = 90;
-				queuedMotorInstructions[i] = a1; i++;
+				queuedMotorInstructions[motorInstructionIndex] = a1;
+				motorInstructionIndex++;
 
 				// Move forward
 				a2.action_type = FORWARDS;
 				a2.magnitude = abs(xMovement);
-				queuedMotorInstructions[i] = a2; i++;
+				queuedMotorInstructions[motorInstructionIndex] = a2;
+				motorInstructionIndex++;
 
 				// Rotate left 90 degrees
 				a3.action_type = ANTICLOCKWISE;
 				a3.magnitude = 90;
-				queuedMotorInstructions[i] = a3; i++;
+				queuedMotorInstructions[motorInstructionIndex] = a3;
+				motorInstructionIndex++;
 
 			}else if(xMovement < 0){
 				// Rotate left 90 degrees
 				a1.action_type = ANTICLOCKWISE;
 				a1.magnitude = 90;
-				queuedMotorInstructions[i] = a1; i++;
+				queuedMotorInstructions[motorInstructionIndex] = a1;
+				motorInstructionIndex++;
 
 				// Move forward
 				a2.action_type = FORWARDS;
 				a2.magnitude = abs(xMovement);
-				queuedMotorInstructions[i] = a2; i++;
+				queuedMotorInstructions[motorInstructionIndex] = a2;
+				motorInstructionIndex++;
 
 				// Rotate right 90 degrees
 				a3.action_type = CLOCKWISE;
 				a3.magnitude = 90;
-				queuedMotorInstructions[i] = a3;
+				queuedMotorInstructions[motorInstructionIndex] = a3;
+				motorInstructionIndex++;
 			}
 
 			if(yMovement > 0){
 				// Move forward
 				a4.action_type = FORWARDS;
 				a4.magnitude = yMovement;
-				queuedMotorInstructions[i] = a4; i++;
+				queuedMotorInstructions[motorInstructionIndex] = a4;
+				motorInstructionIndex++;
+
 			}else if(yMovement < 0){
 				// Move backwards
 				a4.action_type = BACKWARDS;
 				a4.magnitude = yMovement;
-				queuedMotorInstructions[i] = a4; i++;
+				queuedMotorInstructions[motorInstructionIndex] = a4;
+				motorInstructionIndex++;
 			}
 
 			// Clear the joystick movement queue
-			memset(&queuedMovements[0], 0, sizeof(queuedMovements));
+			memset(&joystickCommands[0], 0, sizeof(joystickCommands));
 
 			isReadyToMove = 1;
+			motorInstructionIndex = 0; // Reset the index for the motor control task
 		}
 
 		vTaskDelay(TaskPeriodms);
@@ -470,49 +489,50 @@ static void MovementControlTask(void *pvParameters)
 }
 
 uint8_t movementSpeed = 10;
+uint8_t isWaitingForEncoder = 0;
 /******************************************************************************
  * Description:	Moves the motors according to the movement structs, with encoder feedback
  *****************************************************************************/
-static void MovementControlTask(void *pvParameters)
+static void MotorControlTask(void *pvParameters)
 {
 	const portTickType TaskPeriodms =10UL / portTICK_RATE_MS;
 	(void)pvParameters;
 
+	uint8_t distance;
 
 	for(;;)
 	{
-		if(encoderIsDone == 1){
+		if(isWaitingForEncoder == 0){
 			DFR_Stop();
 			// Move onto next action
-			switch(queuedMotorInstructions[i].action_type){
+			switch(queuedMotorInstructions[motorInstructionIndex].action_type){
 				case FORWARDS:
 					DFR_DriveForward(movementSpeed);
 					// Set left and right wheel magnitude for a given action
-					DFR_SetRightWheelDestination(queuedMotorInstructions[i].magnitude);
-					DFR_SetLeftWheelDestination(queuedMotorInstructions[i].magnitude);
+					DFR_SetRightWheelDestination(queuedMotorInstructions[motorInstructionIndex].magnitude);
+					DFR_SetLeftWheelDestination(queuedMotorInstructions[motorInstructionIndex].magnitude);
 					break;
 				case BACKWARDS:
 					DFR_DriveBackward(movementSpeed);
-					DFR_SetRightWheelDestination(queuedMotorInstructions[i].magnitude);
-					DFR_SetLeftWheelDestination(queuedMotorInstructions[i].magnitude);
+					DFR_SetRightWheelDestination(queuedMotorInstructions[motorInstructionIndex].magnitude);
+					DFR_SetLeftWheelDestination(queuedMotorInstructions[motorInstructionIndex].magnitude);
 					break;
 				case CLOCKWISE:
 					DFR_DriveRight(movementSpeed);
 					// If the magnitude is, for example, 90 degrees, this will correspond to a wheel destination of
-					uint8_t distance = queuedMotorInstructions[i].magnitude / 22.5;
+					distance = queuedMotorInstructions[motorInstructionIndex].magnitude / 22.5;
 					DFR_SetRightWheelDestination(distance);
 					DFR_SetLeftWheelDestination(distance);
 					break;
 				case ANTICLOCKWISE:
 					DFR_DriveLeft(movementSpeed);
-					uint8_t distance = queuedMotorInstructions[i].magnitude / 22.5;
+					distance = queuedMotorInstructions[motorInstructionIndex].magnitude / 22.5;
 					DFR_SetRightWheelDestination(distance);
 					DFR_SetLeftWheelDestination(distance);
 					break;
 			}
 
-			startEncoder = 1;
-			encoderIsDone = 0;
+			isWaitingForEncoder = 0;
 		}
 
 		vTaskDelay(TaskPeriodms);
@@ -527,9 +547,14 @@ static void EncoderControlTask(void *pvParameters)
 
 	for(;;)
 	{
-		if(startEncoder == 1){
-			if(DFR_GetRightWheelCount() > RightDestination){
-			encoderIsDone = 1;
+		if(isWaitingForEncoder == 1){
+			if(DFR_GetRightWheelCount() > DFR_SetRightWheelDestination()){
+
+
+			}
+
+			motorInstructionIndex++;
+			isWaitingForEncoder = 0; // Buggy has reached the destination
 		}
 
 		vTaskDelay(TaskPeriodms);
