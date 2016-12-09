@@ -70,7 +70,8 @@ unsigned dx = 0, dy = 0, cx = 0, cy = 0;
  * Semaphores
  *****************************************************************************/
 
-xSemaphoreHandle xCountingSemaphore;
+// Include all your semaphore declarations here
+//xSemaphoreHandle xCountingSemaphore;
 
 /******************************************************************************
  * Task Defintions
@@ -293,6 +294,14 @@ static void OLEDTask5(void *pvParameters)
  * Description:	This task starts the tune playing, and displays its
  * 				current state on the OLED
  *****************************************************************************/
+
+struct song {
+	uint8_t *sample; // The wav file array
+	uint16_t sampleLength; // Length of the array
+};
+struct song playList[2];
+uint8_t playListIndex = 0;
+
 static void TuneTask(void *pvParameters)
 {
 	const portTickType TaskPeriodms =10UL / portTICK_RATE_MS;
@@ -308,8 +317,10 @@ static void TuneTask(void *pvParameters)
 			SongStarted = 1;
 
 			// Play tune
-			//WavPlayer_Play(WavPlayer_Sample, WavPlayer_SampleLength);
-			WavPlayer_Play(cantinaBandSample, cantinaBandSampleLength);
+			WavPlayer_Play(playList[playListIndex].sample, playList[playListIndex].sampleLength); 
+
+			// Move the play list pointer onto the next song (only two songs atm)
+			if(playListIndex == 0){ playListIndex = 1; }else{ playListIndex = 0; ]
 
 		} else if ((WavPlayer_IsPlaying() == 0) && (SongStarted == 1)) {
 			PutStringOLED((uint8_t*)" Tune: Stopped  ", 4);
@@ -325,11 +336,9 @@ enum states currentState;
 
 int gridLocation[2] = {0, 0};
 enum movements {NONE, LEFT, RIGHT, FORWARDS, BACKWARDS};
+// Initialise them all to NONE. If NONE isn't a movement type, the array will be initialised to all LEFT movements
 enum movements joystickCommands[20] = {NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE};
 uint8_t joystickIndex = 0;
-
-uint8_t isCenterJoystickPressed = 0;
-uint8_t isReadyToMove = 0;
 
 uint8_t X = 0;
 uint8_t Y = 1;
@@ -372,7 +381,7 @@ static void JoystickTask(void *pvParameters)
 				// Loop through all the queued movements
 				currentState = ROUTING;
 			}else{
-				// comment on this
+				// This is so that a single joystick movement doesn't get locked multiple times
 				if(joystickCommands[joystickIndex] != NONE){
 					joystickIndex++;
 				}
@@ -409,7 +418,6 @@ static void RoutingTask(void *pvParameters)
 	int xMovement;
 	int yMovement;
 
-	uint8_t i = 0;
 	struct motorInstruction a1;
 	struct motorInstruction a2;
 	struct motorInstruction a3;
@@ -511,7 +519,6 @@ static void RoutingTask(void *pvParameters)
 }
 
 uint8_t movementSpeed = 10;
-uint8_t isWaitingForEncoder = 0;
 /******************************************************************************
  * Description:	Moves the motors according to the movement structs, with encoder feedback
  *****************************************************************************/
@@ -561,7 +568,8 @@ static void MotorControlTask(void *pvParameters)
 	}
 }
 
-static void EncoderControlTask(void *pvParameters)
+// Interrupt now
+/*static void EncoderControlTask(void *pvParameters)
 {
 	const portTickType TaskPeriodms =10UL / portTICK_RATE_MS;
 	(void)pvParameters;
@@ -581,7 +589,7 @@ static void EncoderControlTask(void *pvParameters)
 
 		vTaskDelay(TaskPeriodms);
 	}
-}
+}*/
 
 /******************************************************************************
  * Description: Read User Input
@@ -648,67 +656,80 @@ static void WEEEOutputTask(void *pvParameters)
 int main(void)
 {
 	// The examples assume that all priority bits are assigned as preemption priority bits.
-    NVIC_SetPriorityGrouping(0UL);
+	NVIC_SetPriorityGrouping(0UL);
 
-    // Init SPI...
-    SPIPort = FreeRTOS_open(board_SSP_PORT, (uint32_t)((void*)0));
+	// Init SPI...
+	SPIPort = FreeRTOS_open(board_SSP_PORT, (uint32_t)((void*)0));
 
-    // Init 7seg
-    GPIO_SetDir(board7SEG_CS_PORT, board7SEG_CS_PIN, boardGPIO_OUTPUT );
-    board7SEG_DEASSERT_CS();
+	// Init 7seg
+	GPIO_SetDir(board7SEG_CS_PORT, board7SEG_CS_PIN, boardGPIO_OUTPUT );
+	board7SEG_DEASSERT_CS();
 
-    // Init OLED
-    OLED_Init(SPIPort);
-    OLED_ClearScreen(OLED_COLOR_WHITE);
+	// Init OLED
+	OLED_Init(SPIPort);
+	OLED_ClearScreen(OLED_COLOR_WHITE);
 
-   	// Init wav player
-   	WavPlayer_Init();
+	// Init wav player
+	WavPlayer_Init();
 
-   	// Joystick Init
-   	joystick_init();
+	// Joystick Init
+	joystick_init();
 
-   	// LED Banks Init
-   	pca9532_init();
+	// LED Banks Init
+	pca9532_init();
 
-   	// Init Chassis Driver
-   	DFR_RobotInit();
+	// Init Chassis Driver
+	DFR_RobotInit();
 
-   	// Enable GPIO Interrupts
-   	NVIC_EnableIRQ(EINT3_IRQn);
+	// Enable GPIO Interrupts
+	NVIC_EnableIRQ(EINT3_IRQn);
 
-    // Create a software timer
-   	SoftwareTimer = xTimerCreate((const int8_t*)"TIMER",   // Just a text name to associate with the timer, useful for debugging, but not used by the kernel.
-                                 SOFTWARE_TIMER_PERIOD_MS, // The period of the timer.
-                                 pdTRUE,                   // This timer will autoreload, so uxAutoReload is set to pdTRUE.
-                                 NULL,                     // The timer ID is not used, so can be set to NULL.
-                                 SoftwareTimerCallback);   // The callback function executed each time the timer expires.
-    xTimerStart(SoftwareTimer, portMAX_DELAY);
+	// Create a software timer
+	SoftwareTimer = xTimerCreate((const int8_t*)"TIMER",   // Just a text name to associate with the timer, useful for debugging, but not used by the kernel.
+				 SOFTWARE_TIMER_PERIOD_MS, // The period of the timer.
+				 pdTRUE,                   // This timer will autoreload, so uxAutoReload is set to pdTRUE.
+				 NULL,                     // The timer ID is not used, so can be set to NULL.
+				 SoftwareTimerCallback);   // The callback function executed each time the timer expires.
+	xTimerStart(SoftwareTimer, portMAX_DELAY);
 
-    // Create the Seven Segment task
-    xTaskCreate(SevenSegmentTask,               // The task that uses the SPI peripheral and seven segment display.
-                (const int8_t* const)"7SEG",    // Text name assigned to the task.  This is just to assist debugging.  The kernel does not use this name itself.
-                configMINIMAL_STACK_SIZE*2,     // The size of the stack allocated to the task.
-                NULL,                           // The parameter is not used, so NULL is passed.
-                0U,                             // The priority allocated to the task.
-                NULL);                          // A handle to the task being created is not required, so just pass in NULL.
+	// Create the Seven Segment task
+	xTaskCreate(SevenSegmentTask,               // The task that uses the SPI peripheral and seven segment display.
+		(const int8_t* const)"7SEG",    // Text name assigned to the task.  This is just to assist debugging.  The kernel does not use this name itself.
+		configMINIMAL_STACK_SIZE*2,     // The size of the stack allocated to the task.
+		NULL,                           // The parameter is not used, so NULL is passed.
+		0U,                             // The priority allocated to the task.
+		NULL);                          // A handle to the task being created is not required, so just pass in NULL.
 
-    // Create the tasks
-    xTaskCreate(OLEDTask1, 			(const int8_t* const)"OLED1", 		configMINIMAL_STACK_SIZE*2, NULL, 1U, NULL);
-    xTaskCreate(OLEDTask2, 			(const int8_t* const)"OLED2", 		configMINIMAL_STACK_SIZE*2, NULL, 2U, NULL);
-    xTaskCreate(OLEDTask3, 			(const int8_t* const)"OLED3", 		configMINIMAL_STACK_SIZE*2, NULL, 3U, NULL);
-    xTaskCreate(OLEDTask4, 			(const int8_t* const)"OLED4", 		configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
-    xTaskCreate(OLEDTask5, 		(const int8_t* const)"OLED5", 		configMINIMAL_STACK_SIZE*2, NULL, 6U, NULL);
-    xTaskCreate(TuneTask,  			(const int8_t* const)"TUNE",  		configMINIMAL_STACK_SIZE*2, NULL, 6U, NULL);
-    xTaskCreate(WEEEInputTask,		(const int8_t* const)"Input",		configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
-    xTaskCreate(WEEEDisplayTask,	(const int8_t* const)"Display",		configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
-    xTaskCreate(WEEEOutputTask,		(const int8_t* const)"Output",		configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
+	// Create the tasks
+	xTaskCreate(OLEDTask1, 			(const int8_t* const)"OLED1", 		configMINIMAL_STACK_SIZE*2, NULL, 1U, NULL);
+	xTaskCreate(OLEDTask2, 			(const int8_t* const)"OLED2", 		configMINIMAL_STACK_SIZE*2, NULL, 2U, NULL);
+	xTaskCreate(OLEDTask3, 			(const int8_t* const)"OLED3", 		configMINIMAL_STACK_SIZE*2, NULL, 3U, NULL);
+	xTaskCreate(OLEDTask4, 			(const int8_t* const)"OLED4", 		configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
+	xTaskCreate(OLEDTask5, 		(const int8_t* const)"OLED5", 		configMINIMAL_STACK_SIZE*2, NULL, 6U, NULL);
+	xTaskCreate(TuneTask,  			(const int8_t* const)"TUNE",  		configMINIMAL_STACK_SIZE*2, NULL, 6U, NULL);
+	xTaskCreate(WEEEInputTask,		(const int8_t* const)"Input",		configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
+	xTaskCreate(WEEEDisplayTask,	(const int8_t* const)"Display",		configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
+	xTaskCreate(WEEEOutputTask,		(const int8_t* const)"Output",		configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
 
-    // Create the tasks we made
-    xTaskCreate(JoystickTask,  			(const int8_t* const)"JoyStick",  		configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
-    xTaskCreate(RoutingTask,		(const int8_t* const)"Routing",				configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
-    xTaskCreate(EncoderControlTask,	(const int8_t* const)"Encoder",				configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
+	// Create the tasks we made
+	xTaskCreate(JoystickTask,  			(const int8_t* const)"JoyStick",  		configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
+	xTaskCreate(RoutingTask,		(const int8_t* const)"Routing",				configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
+	xTaskCreate(EncoderControlTask,	(const int8_t* const)"Encoder",				configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
 
-    currentState = JOYSTICK;
+	// Initiall state of the system
+	currentState = JOYSTICK;
+
+	// Create the songs
+	struct song s1;
+	s1.sample	= WavPlayer_Sample;
+	s1.sampleLength = WavPlayer_SampleLength;
+		
+	struct song s2;
+	s2.sample 	= cantinaBandSample;
+	s2.sampleLength = cantinaBandSampleLength;
+	// Add the songs to the playlist
+	playList[0] = s1;
+	playList[1] = s2;
 
 	// Start the FreeRTOS scheduler.
 	vTaskStartScheduler();
@@ -718,26 +739,33 @@ int main(void)
     for(;;);
 }
 
-
 /******************************************************************************
  * Interrupt Service Routines
  *****************************************************************************/
 void EINT3_IRQHandler (void)
 {
-	// Encoder input 1 (Left)
-	if ((((LPC_GPIOINT->IO2IntStatR) >> 11)& 0x1) == ENABLE)
-	{
+	if(currentState == ENCODER){
+		// Encoder input 1 (Left)
+		if ((((LPC_GPIOINT->IO2IntStatR) >> 11)& 0x1) == ENABLE)
+		{
+			DFR_IncLeftWheelCount();
+		}
 
-	}
-
-	// Encoder input 2 (Right)
-	else if ((((LPC_GPIOINT->IO2IntStatR) >> 12)& 0x1) == ENABLE)
-	{
-
+		// Encoder input 2 (Right)
+		else if ((((LPC_GPIOINT->IO2IntStatR) >> 12)& 0x1) == ENABLE)
+		{
+			DFR_IncRightWheelCount();
+		}
+		
+		// Check if has reached the destination
+		if(DFR_GetLeftWheelCount() > DFR_GetLeftWheelDestination() && DFR_GetRightWheelCount() > DFR_GetRightWheelDestination()){
+			DFR_ClearWheelCount();
+			currentState = MOTOR;
+		}
 	}
 
 	// Joystick UP
-	if ((((LPC_GPIOINT->IO2IntStatR) >> 3)& 0x1) == ENABLE)
+	/*if ((((LPC_GPIOINT->IO2IntStatR) >> 3)& 0x1) == ENABLE)
 	{
 
 	}
@@ -745,13 +773,16 @@ void EINT3_IRQHandler (void)
 	else if ((((LPC_GPIOINT->IO0IntStatR) >> 4)& 0x1) == ENABLE)
 	{
 
-	}
+	}*/
 
 	// Clear GPIO Interrupt Flags
 	// SW3
-    GPIO_ClearInt(0,1 << 4);
-    // Joystick | Encoder | Encoder
-    GPIO_ClearInt(2,1 << 3 | 1 << 11 | 1 << 12);
+	//GPIO_ClearInt(0,1 << 4);
+	// Joystick | Encoder | Encoder
+	//GPIO_ClearInt(2,1 << 3 | 1 << 11 | 1 << 12);
+	
+	// Encoder | Encoder
+	GPIO_ClearInt(2, 1 << 11 | 1 << 12);
 }
 
 
