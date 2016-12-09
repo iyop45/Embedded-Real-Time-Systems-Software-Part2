@@ -66,6 +66,11 @@ uint8_t Seconds, Minutes, Hours;
 // Variables associated with the WEEE navigation
 unsigned dx = 0, dy = 0, cx = 0, cy = 0;
 
+/******************************************************************************
+ * Semaphores
+ *****************************************************************************/
+
+xSemaphoreHandle xCountingSemaphore;
 
 /******************************************************************************
  * Task Defintions
@@ -303,7 +308,8 @@ static void TuneTask(void *pvParameters)
 			SongStarted = 1;
 
 			// Play tune
-			WavPlayer_Play(WavPlayer_Sample, WavPlayer_SampleLength);
+			//WavPlayer_Play(WavPlayer_Sample, WavPlayer_SampleLength);
+			WavPlayer_Play(cantinaBandSample, cantinaBandSampleLength);
 
 		} else if ((WavPlayer_IsPlaying() == 0) && (SongStarted == 1)) {
 			PutStringOLED((uint8_t*)" Tune: Stopped  ", 4);
@@ -314,9 +320,12 @@ static void TuneTask(void *pvParameters)
 	}
 }
 
+enum states {JOYSTICK, ROUTING, MOTOR, ENCODER};
+enum states currentState;
+
 int gridLocation[2] = {0, 0};
-enum movements {LEFT, RIGHT, FORWARDS, BACKWARDS};
-enum movements joystickCommands[20];
+enum movements {NONE, LEFT, RIGHT, FORWARDS, BACKWARDS};
+enum movements joystickCommands[20] = {NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE};
 uint8_t joystickIndex = 0;
 
 uint8_t isCenterJoystickPressed = 0;
@@ -324,6 +333,8 @@ uint8_t isReadyToMove = 0;
 
 uint8_t X = 0;
 uint8_t Y = 1;
+
+uint8_t hasBeenPressed = 0;
 
 /******************************************************************************
  * Description:	This task stores the joystick positions given by the user
@@ -335,39 +346,48 @@ static void JoystickTask(void *pvParameters)
 
 	for(;;)
 	{
-		if(isReadyToMove == 0){
+		if(currentState == JOYSTICK){
 			// Joystick Up
 			if (((GPIO_ReadValue(2) >> 3) & 0x01) == 0){
 				joystickCommands[joystickIndex] = FORWARDS;
-				joystickIndex++;
+				hasBeenPressed = 1;
 
 			// Joystick Down
 			}else if(((GPIO_ReadValue(0) >> 15) & 0x01) == 0){
 				joystickCommands[joystickIndex] = BACKWARDS;
-				joystickIndex++;
+				hasBeenPressed = 1;
 
 			// Joystick Left
 			}else if(((GPIO_ReadValue(2) >> 4) & 0x01) == 0){
 				joystickCommands[joystickIndex] = LEFT;
-				joystickIndex++;
+				hasBeenPressed = 1;
 
 			// Joystick Right
 			}else if(((GPIO_ReadValue(0) >> 16) & 0x01) == 0){
 				joystickCommands[joystickIndex] = RIGHT;
-				joystickIndex++;
+				hasBeenPressed = 1;
 
 			// Joystick Center
 			}else if(((GPIO_ReadValue(0) >> 17) & 0x01) == 0){
 				// Loop through all the queued movements
-				isCenterJoystickPressed = 1;
+				currentState = ROUTING;
+			}else{
+				// comment on this
+				if(joystickCommands[joystickIndex] != NONE){
+					joystickIndex++;
+				}
+
+				hasBeenPressed = 0;
 			}
+
 		}
 
-		vTaskDelay(TaskPeriodms);
+		// Delay the for loop
+		vTaskDelay(TaskPeriodms*10); //100ms
 	}
 }
 
-enum actions {CLOCKWISE, ANTICLOCKWISE, FWD, BKWD};
+enum actions {NA, CLOCKWISE, ANTICLOCKWISE, FWD, BKWD};
 
 struct motorInstruction {
 	enum actions action_type; // Either a rotation or a movement
@@ -397,14 +417,14 @@ static void RoutingTask(void *pvParameters)
 
 	for(;;)
 	{
-		if(isCenterJoystickPressed == 1 && isReadyToMove != 1){
+		if(currentState == ROUTING){
 			// Reset expected grid position
 			finalGridPosition[X] = gridLocation[X];
 			finalGridPosition[Y] = gridLocation[Y];
 
 			uint8_t i;
 			for(i = 0; i < sizeof(joystickCommands); i++){
-				switch(joystickCommands[motorInstructionIndex]){
+				switch(joystickCommands[i]){
 					case FORWARDS:
 						finalGridPosition[Y]++;
 						break;
@@ -480,11 +500,13 @@ static void RoutingTask(void *pvParameters)
 			// Clear the joystick movement queue
 			memset(&joystickCommands[0], 0, sizeof(joystickCommands));
 
-			isReadyToMove = 1;
+			currentState = MOTOR;
 			motorInstructionIndex = 0; // Reset the index for the motor control task
+
 		}
 
-		vTaskDelay(TaskPeriodms);
+		// Delay the for loop
+		vTaskDelay(TaskPeriodms); //10ms
 	}
 }
 
@@ -502,7 +524,7 @@ static void MotorControlTask(void *pvParameters)
 
 	for(;;)
 	{
-		if(isWaitingForEncoder == 0){
+		if(currentState == MOTOR){
 			DFR_Stop();
 			// Move onto next action
 			switch(queuedMotorInstructions[motorInstructionIndex].action_type){
@@ -532,7 +554,7 @@ static void MotorControlTask(void *pvParameters)
 					break;
 			}
 
-			isWaitingForEncoder = 0;
+			currentState = ENCODER;
 		}
 
 		vTaskDelay(TaskPeriodms);
@@ -548,10 +570,10 @@ static void EncoderControlTask(void *pvParameters)
 	for(;;)
 	{
 		if(isWaitingForEncoder == 1){
-			if(DFR_GetRightWheelCount() > DFR_SetRightWheelDestination()){
+			//if(DFR_GetRightWheelCount() > DFR_SetRightWheelDestination()){
 
 
-			}
+			//}
 
 			motorInstructionIndex++;
 			isWaitingForEncoder = 0; // Buggy has reached the destination
@@ -675,11 +697,18 @@ int main(void)
     xTaskCreate(OLEDTask2, 			(const int8_t* const)"OLED2", 		configMINIMAL_STACK_SIZE*2, NULL, 2U, NULL);
     xTaskCreate(OLEDTask3, 			(const int8_t* const)"OLED3", 		configMINIMAL_STACK_SIZE*2, NULL, 3U, NULL);
     xTaskCreate(OLEDTask4, 			(const int8_t* const)"OLED4", 		configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
-    //xTaskCreate(OLEDTask5, 		(const int8_t* const)"OLED5", 		configMINIMAL_STACK_SIZE*2, NULL, 6U, NULL);
-    xTaskCreate(TuneTask,  			(const int8_t* const)"TUNE",  		configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
+    xTaskCreate(OLEDTask5, 		(const int8_t* const)"OLED5", 		configMINIMAL_STACK_SIZE*2, NULL, 6U, NULL);
+    xTaskCreate(TuneTask,  			(const int8_t* const)"TUNE",  		configMINIMAL_STACK_SIZE*2, NULL, 6U, NULL);
     xTaskCreate(WEEEInputTask,		(const int8_t* const)"Input",		configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
     xTaskCreate(WEEEDisplayTask,	(const int8_t* const)"Display",		configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
     xTaskCreate(WEEEOutputTask,		(const int8_t* const)"Output",		configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
+
+    // Create the tasks we made
+    xTaskCreate(JoystickTask,  			(const int8_t* const)"JoyStick",  		configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
+    xTaskCreate(RoutingTask,		(const int8_t* const)"Routing",				configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
+    xTaskCreate(EncoderControlTask,	(const int8_t* const)"Encoder",				configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
+
+    currentState = JOYSTICK;
 
 	// Start the FreeRTOS scheduler.
 	vTaskStartScheduler();
