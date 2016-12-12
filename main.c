@@ -34,8 +34,8 @@
  *****************************************************************************/
 #define SOFTWARE_TIMER_PERIOD_MS (1000 / portTICK_RATE_MS)	// The timer period (1 second)
 #define WAVPLAYER_INCLUDE_SAMPLESONGS						// Include the sample in WavPlayer_Sample.h
-#define PutStringOLED PutStringOLED1						// Select which to use
-//#define PutStringOLED PutStringOLED2						// Select which to use
+//#define PutStringOLED PutStringOLED1						// Select which to use
+#define PutStringOLED PutStringOLED2						// Select which to use
 
 /******************************************************************************
  * Library includes.
@@ -72,6 +72,7 @@ unsigned dx = 0, dy = 0, cx = 0, cy = 0;
 
 // Include all your semaphore declarations here
 //xSemaphoreHandle xCountingSemaphore;
+xSemaphoreHandle SPISemaphore = 0;
 
 /******************************************************************************
  * Task Defintions
@@ -97,7 +98,7 @@ static void SoftwareTimerCallback(xTimerHandle xTimer)
  * Description:	OLED helper writing functions. Put out entire string
  *				in one critical section.
  *****************************************************************************/
-void PutStringOLED1(uint8_t* String, uint8_t Line)
+/*void PutStringOLED1(uint8_t* String, uint8_t Line)
 {
 	uint8_t X = 2;
 	uint8_t Ret = 1;
@@ -113,7 +114,7 @@ void PutStringOLED1(uint8_t* String, uint8_t Line)
 
 		X += 6;
 	}
-}
+}*/
 
 
 /******************************************************************************
@@ -147,24 +148,32 @@ static void SevenSegmentTask(void *pvParameters)
 	{
 		for(i = 0; i < 10; ++i)
 		{
-			// Critical section here so that we don't use the SPI at the same time as the OLED
-			taskENTER_CRITICAL();
-				board7SEG_ASSERT_CS();
-					FreeRTOS_write(SPIPort, &(SevenSegmentDecoder[i]), sizeof(uint8_t));
-				board7SEG_DEASSERT_CS();
-			taskEXIT_CRITICAL();
+			if (xSemaphoreTake(SPISemaphore, 1000)){
+				// Critical section here so that we don't use the SPI at the same time as the OLED
 
-			// Delay until it is time to update the display with a new digit.
-			vTaskDelayUntil(&LastExecutionTime, TaskPeriodms);
+				//taskENTER_CRITICAL();
+				board7SEG_ASSERT_CS();
+				FreeRTOS_write(SPIPort, &(SevenSegmentDecoder[i]), sizeof(uint8_t)); // semaphore?
+				board7SEG_DEASSERT_CS();
+				//taskEXIT_CRITICAL();
+				// gives the semaphore back once done in here
+				xSemaphoreGive(SPISemaphore);
+
+				// Delay until it is time to update the display with a new digit.
+				vTaskDelayUntil(&LastExecutionTime, TaskPeriodms);
+			}
 		}
 	}
 }
+
 
 
 /******************************************************************************
  * Description:	This task makes the top four lines of the OLED black boxes
  *
  *****************************************************************************/
+uint8_t row = 0;
+uint8_t column = 2;
 static void OLEDTask1(void *pvParameters)
 {
 	const portTickType TaskPeriodms = 1000UL / portTICK_RATE_MS;
@@ -174,13 +183,46 @@ static void OLEDTask1(void *pvParameters)
 
 	for(;;)
 	{
+		// mutex semaphore
+		// task must go through SPISemaphore to access SPI
+		// only one task is able to enter this statement
+		// OLEDTask1 and OLEDTask2 will take turns
+		if (xSemaphoreTake(SPISemaphore, 1000)){
+
+			//PutStringOLED((uint8_t*)"", row);
+			/*OLED_Char(column*6, ((row)%7)*9 + 1, (uint8_t)'', OLED_COLOR_BLACK, OLED_COLOR_WHITE);
+
+			if(column == 17){
+				column = 0;
+				// Move onto next row
+				if(row == 2){
+					row = 0;
+				}else{
+					row++;
+				}
+			}else{
+				column++;
+			}*/
+
+
+			PutStringOLED((uint8_t*)"", 0);
+			PutStringOLED((uint8_t*)"", 1);
+			PutStringOLED((uint8_t*)"", 2);
+
+			// gives the semaphore back once done in here
+			xSemaphoreGive(SPISemaphore);
+		}
+
+		vTaskDelayUntil(&LastExecutionTime, TaskPeriodms);
+
+		/*
 		PutStringOLED((uint8_t*)"", 0);
 		PutStringOLED((uint8_t*)"", 1);
 		PutStringOLED((uint8_t*)"", 2);
 		vTaskDelayUntil(&LastExecutionTime, TaskPeriodms);
+		*/
 	}
 }
-
 
 /******************************************************************************
  * Description:	This task makes the top four lines of the OLED empty
@@ -195,12 +237,31 @@ static void OLEDTask2(void *pvParameters)
 
 	for(;;)
 	{
+		// mutex semaphore
+		// task must go through SPISemaphore to access SPI
+		// only one task is able to enter this statement
+		// OLEDTask1 and OLEDTask2 will take turns
+		if (xSemaphoreTake(SPISemaphore, 1000)){
+
+			PutStringOLED((uint8_t*)"                ", 0);
+			vTaskDelay((portTickType)100);
+			PutStringOLED((uint8_t*)"                ", 1);
+			vTaskDelay((portTickType)100);
+			PutStringOLED((uint8_t*)"                ", 2);
+			// gives the semaphore back once done in here
+			xSemaphoreGive(SPISemaphore);
+		}
+
+		vTaskDelayUntil(&LastExecutionTime, TaskPeriodms);
+
+		/*
 		PutStringOLED((uint8_t*)"                ", 0);
 		vTaskDelay((portTickType)100);
 		PutStringOLED((uint8_t*)"                ", 1);
 		vTaskDelay((portTickType)100);
 		PutStringOLED((uint8_t*)"                ", 2);
 		vTaskDelayUntil(&LastExecutionTime, TaskPeriodms);
+		*/
 	}
 }
 
@@ -218,15 +279,34 @@ static void OLEDTask3(void *pvParameters)
 
 	for(;;)
 	{
+		// mutex semaphore
+		// task must go through SPISemaphore to access SPI
+		// only one task is able to enter this statement
+		// OLEDTask1 and OLEDTask2 will take turns
+		if (xSemaphoreTake(SPISemaphore, 1000)){
+
+			PutStringOLED((uint8_t*)"<<<<<<<<<<<<<<< ", 0);
+			PutStringOLED((uint8_t*)" >>>>>>>>>>>>>>>", 1);
+			vTaskDelay((portTickType)400);
+			PutStringOLED((uint8_t*)"<<<<<<<<<<<<<<< ", 2);
+
+			// gives the semaphore back once done in here
+			xSemaphoreGive(SPISemaphore);
+		}
+
+		//vTaskDelay(TaskPeriodms);
+		vTaskDelayUntil(&LastExecutionTime, TaskPeriodms);
+
+		/*
 		PutStringOLED((uint8_t*)"<<<<<<<<<<<<<<< ", 0);
 		PutStringOLED((uint8_t*)" >>>>>>>>>>>>>>>", 1);
 		vTaskDelay((portTickType)400);
 		PutStringOLED((uint8_t*)"<<<<<<<<<<<<<<< ", 2);
 		//vTaskDelay(TaskPeriodms);
 		vTaskDelayUntil(&LastExecutionTime, TaskPeriodms);
+		*/
 	}
 }
-
 
 /******************************************************************************
  * Description:	This task displays a moving + on a bar of -
@@ -242,6 +322,28 @@ static void OLEDTask4(void *pvParameters)
 
 	for(;;)
 	{
+		// mutex semaphore
+		// task must go through SPISemaphore to access SPI
+		// only one task is able to enter this statement
+		// OLEDTask1 and OLEDTask2 will take turns
+		if (xSemaphoreTake(SPISemaphore, 1000)){
+			if (Up)
+				Buffer[ID] = '+';
+			else
+				Buffer[ID] = '-';
+
+			if (ID == 15) { ID = 0; Up = !Up; }
+			else { ++ID; }
+
+			PutStringOLED((uint8_t*)Buffer, 3);
+
+			// gives the semaphore back once done in here
+			xSemaphoreGive(SPISemaphore);
+		}
+
+		vTaskDelay(TaskPeriodms);
+
+		/*_
 		if (Up)
 			Buffer[ID] = '+';
 		else
@@ -253,8 +355,12 @@ static void OLEDTask4(void *pvParameters)
 		PutStringOLED((uint8_t*)Buffer, 3);
 
 		vTaskDelay(TaskPeriodms);
+		*/
 	}
 }
+
+
+
 
 
 /******************************************************************************
@@ -271,6 +377,35 @@ static void OLEDTask5(void *pvParameters)
 
 	for(;;)
 	{
+		// mutex semaphore
+		// task must go through SPISemaphore to access SPI
+		// only one task is able to enter this statement
+		// OLEDTask1 and OLEDTask2 will take turns
+		if (xSemaphoreTake(SPISemaphore, 1000)){
+
+			// remove critical?
+			// Critical to prevent time variables being changed to while writing
+			//taskENTER_CRITICAL();
+				if ((Hours < 10) && (Minutes < 10) && (Seconds < 10))	sprintf(Buffer, "Time:  0%d:0%d:0%d", (int)Hours, Minutes, Seconds);
+				else if ((Hours < 10) && (Minutes < 10))				sprintf(Buffer, "Time:  0%d:0%d:%d", (int)Hours, Minutes, Seconds);
+				else if ((Hours < 10) && (Seconds < 10))				sprintf(Buffer, "Time:  0%d:%d:0%d", (int)Hours, Minutes, Seconds);
+				else if ((Minutes < 10) && (Seconds < 10))				sprintf(Buffer, "Time:  %d:0%d:0%d", (int)Hours, Minutes, Seconds);
+				else if (Seconds < 10)									sprintf(Buffer, "Time:  %d:%d:0%d", (int)Hours, Minutes, Seconds);
+				else if (Minutes < 10)									sprintf(Buffer, "Time:  %d:0%d:%d", (int)Hours, Minutes, Seconds);
+				else if (Hours < 10)									sprintf(Buffer, "Time:  0%d:%d:%d", (int)Hours, Minutes, Seconds);
+				else 													sprintf(Buffer, "Time:  %d:%d:%d", (int)Hours, Minutes, Seconds);
+			//taskEXIT_CRITICAL();
+
+			PutStringOLED((uint8_t*)Buffer, 6);
+
+			// gives the semaphore back once done in here
+			xSemaphoreGive(SPISemaphore);
+		}
+
+
+		vTaskDelayUntil(&LastExecutionTime, TaskPeriodms);
+
+		/*
 		// Critical to prevent time variables being changed to while writing
 		taskENTER_CRITICAL();
 			if ((Hours < 10) && (Minutes < 10) && (Seconds < 10))	sprintf(Buffer, "Time:  0%d:0%d:0%d", (int)Hours, Minutes, Seconds);
@@ -286,6 +421,7 @@ static void OLEDTask5(void *pvParameters)
 		PutStringOLED((uint8_t*)Buffer, 6);
 
 		vTaskDelayUntil(&LastExecutionTime, TaskPeriodms);
+		*/
 	}
 }
 
@@ -317,10 +453,10 @@ static void TuneTask(void *pvParameters)
 			SongStarted = 1;
 
 			// Play tune
-			WavPlayer_Play(playList[playListIndex].sample, playList[playListIndex].sampleLength); 
+			WavPlayer_Play(playList[playListIndex].sample, playList[playListIndex].sampleLength);
 
 			// Move the play list pointer onto the next song (only two songs atm)
-			if(playListIndex == 0){ playListIndex = 1; }else{ playListIndex = 0; ]
+			//if(playListIndex == 0){ playListIndex = 1; }else{ playListIndex = 0; }
 
 		} else if ((WavPlayer_IsPlaying() == 0) && (SongStarted == 1)) {
 			PutStringOLED((uint8_t*)" Tune: Stopped  ", 4);
@@ -352,10 +488,11 @@ static void JoystickTask(void *pvParameters)
 {
 	const portTickType TaskPeriodms =10UL / portTICK_RATE_MS;
 	(void)pvParameters;
-
 	for(;;)
 	{
 		if(currentState == JOYSTICK){
+			taskENTER_CRITICAL();
+
 			// Joystick Up
 			if (((GPIO_ReadValue(2) >> 3) & 0x01) == 0){
 				joystickCommands[joystickIndex] = FORWARDS;
@@ -388,6 +525,8 @@ static void JoystickTask(void *pvParameters)
 
 				hasBeenPressed = 0;
 			}
+
+			taskEXIT_CRITICAL();
 
 		}
 
@@ -518,7 +657,7 @@ static void RoutingTask(void *pvParameters)
 	}
 }
 
-uint8_t movementSpeed = 10;
+uint8_t movementSpeed = 20;
 /******************************************************************************
  * Description:	Moves the motors according to the movement structs, with encoder feedback
  *****************************************************************************/
@@ -532,7 +671,6 @@ static void MotorControlTask(void *pvParameters)
 	for(;;)
 	{
 		if(currentState == MOTOR){
-			DFR_Stop();
 			// Move onto next action
 			switch(queuedMotorInstructions[motorInstructionIndex].action_type){
 				case FORWARDS:
@@ -550,14 +688,14 @@ static void MotorControlTask(void *pvParameters)
 					DFR_DriveRight(movementSpeed);
 					// If the magnitude is, for example, 90 degrees, this will correspond to a wheel destination of
 					distance = queuedMotorInstructions[motorInstructionIndex].magnitude / 22.5;
-					DFR_SetRightWheelDestination(distance);
-					DFR_SetLeftWheelDestination(distance);
+					DFR_SetRightWheelDestination(10);
+					DFR_SetLeftWheelDestination(10);
 					break;
 				case ANTICLOCKWISE:
 					DFR_DriveLeft(movementSpeed);
 					distance = queuedMotorInstructions[motorInstructionIndex].magnitude / 22.5;
-					DFR_SetRightWheelDestination(distance);
-					DFR_SetLeftWheelDestination(distance);
+					DFR_SetRightWheelDestination(10);
+					DFR_SetLeftWheelDestination(10);
 					break;
 			}
 
@@ -591,11 +729,12 @@ static void MotorControlTask(void *pvParameters)
 	}
 }*/
 
+
 /******************************************************************************
  * Description: Read User Input
  *
  *****************************************************************************/
-static void WEEEInputTask(void *pvParameters)
+/*static void WEEEInputTask(void *pvParameters)
 {
 	const portTickType TaskPeriodms =50UL / portTICK_RATE_MS;
 	(void)pvParameters;
@@ -607,14 +746,14 @@ static void WEEEInputTask(void *pvParameters)
 
 		vTaskDelay(TaskPeriodms);
 	}
-}
+}*/
 
 
 /******************************************************************************
  * Description: Write Input to Display
  *
  *****************************************************************************/
-static void WEEEDisplayTask(void *pvParameters)
+/*static void WEEEDisplayTask(void *pvParameters)
 {
 	const portTickType TaskPeriodms =200UL / portTICK_RATE_MS;
 	(void)pvParameters;
@@ -627,14 +766,14 @@ static void WEEEDisplayTask(void *pvParameters)
 		PutStringOLED((uint8_t*)"Des:0,0 Cur:0,0", 5);
 		vTaskDelay(TaskPeriodms);
 	}
-}
+}*/
 
 
 /******************************************************************************
  * Description: Move the Robot Around
  *
  *****************************************************************************/
-static void WEEEOutputTask(void *pvParameters)
+/*static void WEEEOutputTask(void *pvParameters)
 {
 	const portTickType TaskPeriodms =50UL / portTICK_RATE_MS;
 	(void)pvParameters;
@@ -646,7 +785,7 @@ static void WEEEOutputTask(void *pvParameters)
 
 		vTaskDelay(TaskPeriodms);
 	}
-}
+}*/
 
 
 /******************************************************************************
@@ -684,6 +823,10 @@ int main(void)
 	// Enable GPIO Interrupts
 	NVIC_EnableIRQ(EINT3_IRQn);
 
+	// create mutex semaphore -- has to give the semaphore back after it is taken for it to be used elsewhere
+	//SPISemaphore = xSemaphoreCreateMutex();
+	SPISemaphore = xSemaphoreCreateRecursiveMutex();
+
 	// Create a software timer
 	SoftwareTimer = xTimerCreate((const int8_t*)"TIMER",   // Just a text name to associate with the timer, useful for debugging, but not used by the kernel.
 				 SOFTWARE_TIMER_PERIOD_MS, // The period of the timer.
@@ -700,36 +843,46 @@ int main(void)
 		0U,                             // The priority allocated to the task.
 		NULL);                          // A handle to the task being created is not required, so just pass in NULL.
 
+
 	// Create the tasks
 	xTaskCreate(OLEDTask1, 			(const int8_t* const)"OLED1", 		configMINIMAL_STACK_SIZE*2, NULL, 1U, NULL);
 	xTaskCreate(OLEDTask2, 			(const int8_t* const)"OLED2", 		configMINIMAL_STACK_SIZE*2, NULL, 2U, NULL);
 	xTaskCreate(OLEDTask3, 			(const int8_t* const)"OLED3", 		configMINIMAL_STACK_SIZE*2, NULL, 3U, NULL);
 	xTaskCreate(OLEDTask4, 			(const int8_t* const)"OLED4", 		configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
-	xTaskCreate(OLEDTask5, 		(const int8_t* const)"OLED5", 		configMINIMAL_STACK_SIZE*2, NULL, 6U, NULL);
+	xTaskCreate(OLEDTask5, 			(const int8_t* const)"OLED5", 		configMINIMAL_STACK_SIZE*2, NULL, 4U, NULL);
 	xTaskCreate(TuneTask,  			(const int8_t* const)"TUNE",  		configMINIMAL_STACK_SIZE*2, NULL, 6U, NULL);
-	xTaskCreate(WEEEInputTask,		(const int8_t* const)"Input",		configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
-	xTaskCreate(WEEEDisplayTask,	(const int8_t* const)"Display",		configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
-	xTaskCreate(WEEEOutputTask,		(const int8_t* const)"Output",		configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
+	//xTaskCreate(WEEEInputTask,		(const int8_t* const)"Input",		configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
+	//xTaskCreate(WEEEDisplayTask,	(const int8_t* const)"Display",		configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
+	//xTaskCreate(WEEEOutputTask,		(const int8_t* const)"Output",		configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
 
 	// Create the tasks we made
-	xTaskCreate(JoystickTask,  			(const int8_t* const)"JoyStick",  		configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
+	xTaskCreate(JoystickTask,  		(const int8_t* const)"JoyStick",  			configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
 	xTaskCreate(RoutingTask,		(const int8_t* const)"Routing",				configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
-	xTaskCreate(EncoderControlTask,	(const int8_t* const)"Encoder",				configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
+	xTaskCreate(MotorControlTask,	(const int8_t* const)"MotorControlTask",	configMINIMAL_STACK_SIZE*2, NULL, 3U, NULL);
 
-	// Initiall state of the system
+	// Initial state of the system
 	currentState = JOYSTICK;
 
 	// Create the songs
-	struct song s1;
-	s1.sample	= WavPlayer_Sample;
-	s1.sampleLength = WavPlayer_SampleLength;
-		
+	//struct song s1;
+	//s1.sample	= WavPlayer_Sample;
+	//s1.sampleLength = WavPlayer_SampleLength;
+
 	struct song s2;
 	s2.sample 	= cantinaBandSample;
 	s2.sampleLength = cantinaBandSampleLength;
 	// Add the songs to the playlist
-	playList[0] = s1;
-	playList[1] = s2;
+	playList[0] = s2;
+	//playList[1] = s2;
+
+
+	// Set the gear to 2
+	DFR_IncGear();
+	//DFR_DriveStop();
+
+	//DFR_DriveForward(movementSpeed);
+
+
 
 	// Start the FreeRTOS scheduler.
 	vTaskStartScheduler();
@@ -756,11 +909,13 @@ void EINT3_IRQHandler (void)
 		{
 			DFR_IncRightWheelCount();
 		}
-		
+
 		// Check if has reached the destination
 		if(DFR_GetLeftWheelCount() > DFR_GetLeftWheelDestination() && DFR_GetRightWheelCount() > DFR_GetRightWheelDestination()){
-			DFR_ClearWheelCount();
+			DFR_ClearWheelCounts();
+			motorInstructionIndex++;
 			currentState = MOTOR;
+			//DFR_DriveStop();
 		}
 	}
 
@@ -780,7 +935,7 @@ void EINT3_IRQHandler (void)
 	//GPIO_ClearInt(0,1 << 4);
 	// Joystick | Encoder | Encoder
 	//GPIO_ClearInt(2,1 << 3 | 1 << 11 | 1 << 12);
-	
+
 	// Encoder | Encoder
 	GPIO_ClearInt(2, 1 << 11 | 1 << 12);
 }
