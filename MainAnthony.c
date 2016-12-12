@@ -139,6 +139,7 @@ void PutStringOLED1(uint8_t* String, uint8_t Line)
  *****************************************************************************/
 void PutStringOLED2(uint8_t* String, uint8_t Line)
 {
+	/*
 	// (queue handle, pointer to item to receive, how long to wait
 	// if there is an item in the queue deque it and do something
 	// NB -- if the receive task is higher priority than the send task, it will execute this directly after
@@ -173,10 +174,10 @@ void PutStringOLED2(uint8_t* String, uint8_t Line)
  	// interrupt just gives a semaphore and task does all the work
 	// other tasks can be processed this way and all the cpu isnt used up by running code in an ISR
 	if (xSemaphoreTake(ISRSemaphore, portMAX_DELAY)){
-
 	}
-
-	taskENTER_CRITICAL();
+	*/
+	// remove critical
+	taskENTER_CRITICAL(); 
 		OLED_String(2,  ((Line)%7)*9 + 1, String, OLED_COLOR_BLACK, OLED_COLOR_WHITE);
 	taskEXIT_CRITICAL();
 }
@@ -199,17 +200,21 @@ static void SevenSegmentTask(void *pvParameters)
 
 	for(;;)
 	{
-		for(i = 0; i < 10; ++i)
-		{
-			// Critical section here so that we don't use the SPI at the same time as the OLED
-			taskENTER_CRITICAL();
-				board7SEG_ASSERT_CS();
-					FreeRTOS_write(SPIPort, &(SevenSegmentDecoder[i]), sizeof(uint8_t)); // semaphore?
-				board7SEG_DEASSERT_CS();
-			taskEXIT_CRITICAL();
+		if (xSemaphoreTake(SPISemaphore, 1000)){
+			for(i = 0; i < 10; ++i)
+			{
+				// Critical section here so that we don't use the SPI at the same time as the OLED
+				taskENTER_CRITICAL();
+					board7SEG_ASSERT_CS();
+						FreeRTOS_write(SPIPort, &(SevenSegmentDecoder[i]), sizeof(uint8_t)); // semaphore?
+					board7SEG_DEASSERT_CS();
+				taskEXIT_CRITICAL();
 
-			// Delay until it is time to update the display with a new digit.
-			vTaskDelayUntil(&LastExecutionTime, TaskPeriodms);
+				// Delay until it is time to update the display with a new digit.
+				vTaskDelayUntil(&LastExecutionTime, TaskPeriodms);
+			}
+			// gives the semaphore back once done in here
+			xSemaphoreGive(SPISemaphore);
 		}
 	}
 }
@@ -229,7 +234,7 @@ static void OLEDTask1(void *pvParameters)
 	for(;;)
 	{	
 		// mutex semaphore
-		// task must go through preciousResourceSemaphore to access SPI
+		// task must go through SPISemaphore to access SPI
 		// only one task is able to enter this statement
 		// OLEDTask1 and OLEDTask2 will take turns
 		if (xSemaphoreTake(SPISemaphore, 1000)){
@@ -239,7 +244,7 @@ static void OLEDTask1(void *pvParameters)
 			PutStringOLED((uint8_t*)"", 2);
 
 			// gives the semaphore back once done in here
-			xSemaphoreGive(preciousResourceSemaphore);
+			xSemaphoreGive(SPISemaphore);
 		}
 
 		vTaskDelayUntil(&LastExecutionTime, TaskPeriodms);
@@ -268,17 +273,17 @@ static void OLEDTask2(void *pvParameters)
 	for(;;)
 	{
 		// mutex semaphore
-		// task must go through preciousResourceSemaphore to access SPI
+		// task must go through SPISemaphore to access SPI
 		// only one task is able to enter this statement
 		// OLEDTask1 and OLEDTask2 will take turns
-		if (xSemaphoreTake(preciousResourceSemaphore, 1000)){
+		if (xSemaphoreTake(SPISemaphore, 1000)){
 			PutStringOLED((uint8_t*)"                ", 0);
 			vTaskDelay((portTickType)100);
 			PutStringOLED((uint8_t*)"                ", 1);
 			vTaskDelay((portTickType)100);
 			PutStringOLED((uint8_t*)"                ", 2);
 			// gives the semaphore back once done in here
-			xSemaphoreGive(preciousResourceSemaphore);
+			xSemaphoreGive(SPISemaphore);
 		}_
 
 		vTaskDelayUntil(&LastExecutionTime, TaskPeriodms);
@@ -309,10 +314,10 @@ static void OLEDTask3(void *pvParameters)
 	for(;;)
 	{
 		// mutex semaphore
-		// task must go through preciousResourceSemaphore to access SPI
+		// task must go through SPISemaphore to access SPI
 		// only one task is able to enter this statement
 		// OLEDTask1 and OLEDTask2 will take turns
-		if (xSemaphoreTake(preciousResourceSemaphore, 1000)){
+		if (xSemaphoreTake(SPISemaphore, 1000)){
 
 			PutStringOLED((uint8_t*)"<<<<<<<<<<<<<<< ", 0);
 			PutStringOLED((uint8_t*)" >>>>>>>>>>>>>>>", 1);
@@ -320,11 +325,12 @@ static void OLEDTask3(void *pvParameters)
 			PutStringOLED((uint8_t*)"<<<<<<<<<<<<<<< ", 2);
 
 			// gives the semaphore back once done in here
-			xSemaphoreGive(preciousResourceSemaphore);
+			xSemaphoreGive(SPISemaphore);
 		}_
 
 		//vTaskDelay(TaskPeriodms);
 		vTaskDelayUntil(&LastExecutionTime, TaskPeriodms);
+
 		/*
 		PutStringOLED((uint8_t*)"<<<<<<<<<<<<<<< ", 0);
 		PutStringOLED((uint8_t*)" >>>>>>>>>>>>>>>", 1);
@@ -352,10 +358,10 @@ static void OLEDTask4(void *pvParameters)
 	for(;;)
 	{
 		// mutex semaphore
-		// task must go through preciousResourceSemaphore to access SPI
+		// task must go through SPISemaphore to access SPI
 		// only one task is able to enter this statement
 		// OLEDTask1 and OLEDTask2 will take turns
-		if (xSemaphoreTake(preciousResourceSemaphore, 1000)){
+		if (xSemaphoreTake(SPISemaphore, 1000)){
 			if (Up)
 				Buffer[ID] = '+';
 			else
@@ -366,12 +372,12 @@ static void OLEDTask4(void *pvParameters)
 
 			PutStringOLED((uint8_t*)Buffer, 3);
 
-			vTaskDelay(TaskPeriodms);
-
-
 			// gives the semaphore back once done in here
-			xSemaphoreGive(preciousResourceSemaphore);
+			xSemaphoreGive(SPISemaphore);
 		}
+
+		vTaskDelay(TaskPeriodms);
+
 		/*_
 		if (Up)
 			Buffer[ID] = '+';
@@ -404,17 +410,34 @@ static void OLEDTask5(void *pvParameters)
 	for(;;)
 	{
 		// mutex semaphore
-		// task must go through preciousResourceSemaphore to access SPI
+		// task must go through SPISemaphore to access SPI
 		// only one task is able to enter this statement
 		// OLEDTask1 and OLEDTask2 will take turns
-		if (xSemaphoreTake(preciousResourceSemaphore, 1000)){
-			exampleAccessSPI();
+		if (xSemaphoreTake(SPISemaphore, 1000)){
+
+			// remove critical?
+			// Critical to prevent time variables being changed to while writing
+			taskENTER_CRITICAL();  
+				if ((Hours < 10) && (Minutes < 10) && (Seconds < 10))	sprintf(Buffer, "Time:  0%d:0%d:0%d", (int)Hours, Minutes, Seconds);
+				else if ((Hours < 10) && (Minutes < 10))				sprintf(Buffer, "Time:  0%d:0%d:%d", (int)Hours, Minutes, Seconds);
+				else if ((Hours < 10) && (Seconds < 10))				sprintf(Buffer, "Time:  0%d:%d:0%d", (int)Hours, Minutes, Seconds);
+				else if ((Minutes < 10) && (Seconds < 10))				sprintf(Buffer, "Time:  %d:0%d:0%d", (int)Hours, Minutes, Seconds);
+				else if (Seconds < 10)									sprintf(Buffer, "Time:  %d:%d:0%d", (int)Hours, Minutes, Seconds);
+				else if (Minutes < 10)									sprintf(Buffer, "Time:  %d:0%d:%d", (int)Hours, Minutes, Seconds);
+				else if (Hours < 10)									sprintf(Buffer, "Time:  0%d:%d:%d", (int)Hours, Minutes, Seconds);
+				else 													sprintf(Buffer, "Time:  %d:%d:%d", (int)Hours, Minutes, Seconds);
+			taskEXIT_CRITICAL();
+
+			PutStringOLED((uint8_t*)Buffer, 6);
 
 			// gives the semaphore back once done in here
-			xSemaphoreGive(preciousResourceSemaphore);
+			xSemaphoreGive(SPISemaphore);
 		}_
 
 
+		vTaskDelayUntil(&LastExecutionTime, TaskPeriodms);
+
+		/*
 		// Critical to prevent time variables being changed to while writing
 		taskENTER_CRITICAL();
 			if ((Hours < 10) && (Minutes < 10) && (Seconds < 10))	sprintf(Buffer, "Time:  0%d:0%d:0%d", (int)Hours, Minutes, Seconds);
@@ -430,6 +453,7 @@ static void OLEDTask5(void *pvParameters)
 		PutStringOLED((uint8_t*)Buffer, 6);
 
 		vTaskDelayUntil(&LastExecutionTime, TaskPeriodms);
+		*/
 	}
 }
 
@@ -847,13 +871,14 @@ int main(void)
 	// create mutex semaphore -- has to give the semaphore back after it is taken for it to be used elsewhere
 	SPISemaphore = xSemaphoreCreateMutex();
 
+	/*
 	// create binary semaphores -- don't have to give the semaphore backe
 	vSemaphoreCreateBinary(OLEDSemaphore);
 	vSemaphoreCreateBinary(ISRSemaphore);
 
 	//(queue length ie, how many items you can send to the queue before xQueueSend gives a FALSE return, size of one item)
 	QueueHandle = xQueueCreate(3, sizeof(int));  // create a queue handle to send items to the queue
-
+	*/
 	// Create the tasks
 	//          function name,      task name for descriptive purpose, stack size ,parameter passed to task , priority, task handle        
 	xTaskCreate(OLEDTask1, 			(const int8_t* const)"OLED1", 		configMINIMAL_STACK_SIZE*2, NULL, 1U, NULL);
@@ -899,6 +924,7 @@ int main(void)
  *****************************************************************************/
 void EINT3_IRQHandler (void)
 {
+
 	/* This Way
 	 *
 	 * currently happening task --->
@@ -911,7 +937,7 @@ void EINT3_IRQHandler (void)
 	// binary semaphore
 	// tells the task it passes the semaphore to when to execute
 	// (the semaphore itself, parameter used to check if task is awakened by this semaphore)
-	xSemaphoreGiveFromISR(ISRSemaphore, NULL);		// called every time the interrupt happens
+	//xSemaphoreGiveFromISR(ISRSemaphore, NULL);		// called every time the interrupt happens
 
 
 	/* This Way
@@ -922,11 +948,12 @@ void EINT3_IRQHandler (void)
 	 *
 	 * this way, the interrupt yeilds and goes straight to the task awaiting the semaphore after the ISR exits
 	 */ 
-	long taskWoken = 0;
+	//long taskWoken = 0;
 	// binary semaphore
 	// tells the task it passes the semaphore to when to execute
 	// (the semaphore itself, parameter used to check if task is awakened by this semaphore)
-	xSemaphoreGiveFromISR(ISRSemaphore, &taskWoken);
+	//xSemaphoreGiveFromISR(ISRSemaphore, &taskWoken);
+
 	if (taskWoken){
 		vPortYeildFromISR();
 	}
