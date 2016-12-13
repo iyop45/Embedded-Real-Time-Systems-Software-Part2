@@ -74,6 +74,20 @@ unsigned dx = 0, dy = 0, cx = 0, cy = 0;
 //xSemaphoreHandle xCountingSemaphore;
 xSemaphoreHandle SPISemaphore = 0;
 
+// Message queue
+long joystickToRoutingSend;
+long routingToMotorSend;
+
+/******************************************************************************
+* Queue
+*****************************************************************************/
+/******************************************************************************
+*
+*
+*****************************************************************************/
+xQueueHandle joystickToRoutingQueueHandle = 0;
+xQueueHandle routingToMotorQueueHandle = 0;
+
 /******************************************************************************
  * Task Defintions
  *****************************************************************************/
@@ -213,7 +227,7 @@ static void OLEDTask1(void *pvParameters)
 			xSemaphoreGive(SPISemaphore);
 		}
 
-		vTaskDelayUntil(&LastExecutionTime, TaskPeriodms);
+		vTaskDelayUntil(&LastExecutionTime, TaskPeriodms*10);
 
 		/*
 		PutStringOLED((uint8_t*)"", 0);
@@ -252,7 +266,7 @@ static void OLEDTask2(void *pvParameters)
 			xSemaphoreGive(SPISemaphore);
 		}
 
-		vTaskDelayUntil(&LastExecutionTime, TaskPeriodms);
+		vTaskDelayUntil(&LastExecutionTime, TaskPeriodms*10);
 
 		/*
 		PutStringOLED((uint8_t*)"                ", 0);
@@ -295,7 +309,7 @@ static void OLEDTask3(void *pvParameters)
 		}
 
 		//vTaskDelay(TaskPeriodms);
-		vTaskDelayUntil(&LastExecutionTime, TaskPeriodms);
+		vTaskDelayUntil(&LastExecutionTime,TaskPeriodms*10);
 
 		/*
 		PutStringOLED((uint8_t*)"<<<<<<<<<<<<<<< ", 0);
@@ -341,7 +355,7 @@ static void OLEDTask4(void *pvParameters)
 			xSemaphoreGive(SPISemaphore);
 		}
 
-		vTaskDelay(TaskPeriodms*20);
+		vTaskDelay(TaskPeriodms*10);
 
 		/*_
 		if (Up)
@@ -433,7 +447,7 @@ static void OLEDTask5(void *pvParameters)
 
 struct song {
 	uint8_t *sample; // The wav file array
-	uint16_t sampleLength; // Length of the array
+	uint32_t sampleLength; // Length of the array
 };
 struct song playList[2];
 uint8_t playListIndex = 0;
@@ -454,13 +468,13 @@ static void TuneTask(void *pvParameters)
 
 			// Play tune
 			WavPlayer_Play(playList[playListIndex].sample, playList[playListIndex].sampleLength);
-
 			// Move the play list pointer onto the next song (only two songs atm)
 			//if(playListIndex == 0){ playListIndex = 1; }else{ playListIndex = 0; }
 
 		} else if ((WavPlayer_IsPlaying() == 0) && (SongStarted == 1)) {
 			PutStringOLED((uint8_t*)" Tune: Stopped  ", 4);
 			SongStarted = 0;
+			// If just left button is pressed
 		}
 
 		vTaskDelay(TaskPeriodms);
@@ -473,65 +487,12 @@ enum states currentState;
 int gridLocation[2] = {0, 0};
 enum movements {NONE, LEFT, RIGHT, FORWARDS, BACKWARDS};
 // Initialise them all to NONE. If NONE isn't a movement type, the array will be initialised to all LEFT movements
-enum movements joystickCommands[20] = {NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE};
-uint8_t joystickIndex = 0;
+//enum movements joystickCommands[20] = {NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE};
 
 uint8_t X = 0;
 uint8_t Y = 1;
 
-uint8_t hasBeenPressed = 0;
-
-/******************************************************************************
- * Description:	This task stores the joystick positions given by the user
- *****************************************************************************/
-static void JoystickTask(void *pvParameters)
-{
-	const portTickType TaskPeriodms =10UL / portTICK_RATE_MS;
-	(void)pvParameters;
-	for(;;)
-	{
-		if(currentState == JOYSTICK){
-
-			// Joystick Up
-			if (((GPIO_ReadValue(2) >> 3) & 0x01) == 0){
-				joystickCommands[joystickIndex] = FORWARDS;
-				hasBeenPressed = 1;
-
-			// Joystick Down
-			}else if(((GPIO_ReadValue(0) >> 15) & 0x01) == 0){
-				joystickCommands[joystickIndex] = BACKWARDS;
-				hasBeenPressed = 1;
-
-			// Joystick Left
-			}else if(((GPIO_ReadValue(2) >> 4) & 0x01) == 0){
-				joystickCommands[joystickIndex] = LEFT;
-				hasBeenPressed = 1;
-
-			// Joystick Right
-			}else if(((GPIO_ReadValue(0) >> 16) & 0x01) == 0){
-				joystickCommands[joystickIndex] = RIGHT;
-				hasBeenPressed = 1;
-
-			// Joystick Center
-			}else if(((GPIO_ReadValue(0) >> 17) & 0x01) == 0){
-				// Loop through all the queued movements
-				currentState = ROUTING;
-			}else{
-				// This is so that a single joystick movement doesn't get locked multiple times
-				if(joystickCommands[joystickIndex] != NONE){
-					joystickIndex++;
-				}
-
-				hasBeenPressed = 0;
-			}
-
-		}
-
-		// Delay the for loop
-		vTaskDelay(TaskPeriodms*10); //100ms
-	}
-}
-
+// routing variables
 enum actions {NA, CLOCKWISE, ANTICLOCKWISE, FWD, BKWD};
 
 struct motorInstruction {
@@ -540,7 +501,7 @@ struct motorInstruction {
 };
 
 int finalGridPosition[2] = {0, 0};
-struct motorInstruction queuedMotorInstructions[4];
+//struct motorInstruction queuedMotorInstructions[4];
 uint8_t motorInstructionIndex = 0;
 /******************************************************************************
  * Description:	Movement control. This task creates the movement objects required to reach the destination
@@ -550,7 +511,6 @@ static void RoutingTask(void *pvParameters)
 	const portTickType TaskPeriodms =10UL / portTICK_RATE_MS;
 	(void)pvParameters;
 
-	int expectedGridPosition[2];
 	int xMovement;
 	int yMovement;
 
@@ -558,6 +518,8 @@ static void RoutingTask(void *pvParameters)
 	struct motorInstruction a2;
 	struct motorInstruction a3;
 	struct motorInstruction a4;
+
+	int joystickCommands;
 
 	uint8_t i; // For loops
 
@@ -568,20 +530,24 @@ static void RoutingTask(void *pvParameters)
 			finalGridPosition[X] = gridLocation[X];
 			finalGridPosition[Y] = gridLocation[Y];
 
-			for(i = 0; i < sizeof(joystickCommands); i++){
-				switch(joystickCommands[i]){
-					case FORWARDS:
-						finalGridPosition[Y]++;
-						break;
-					case BACKWARDS:
-						finalGridPosition[Y]--;
-						break;
-					case LEFT:
-						finalGridPosition[X]--;
-						break;
-					case RIGHT:
-						finalGridPosition[X]++;
-						break;
+			//for(i = 0; i < sizeof(joystickCommands); i++){
+			for(i = 0; i < 20; i++){
+				if(xQueueReceive(joystickToRoutingQueueHandle, &joystickCommands, 10)){
+					//switch(joystickCommands[i]){
+					switch(joystickCommands){
+						case FORWARDS:
+							finalGridPosition[Y]++;
+							break;
+						case BACKWARDS:
+							finalGridPosition[Y]--;
+							break;
+						case LEFT:
+							finalGridPosition[X]--;
+							break;
+						case RIGHT:
+							finalGridPosition[X]++;
+							break;
+					}
 				}
 			}
 
@@ -593,79 +559,93 @@ static void RoutingTask(void *pvParameters)
 				// Rotate right 90 degrees
 				a1.action_type = CLOCKWISE;
 				a1.magnitude = 90;
-				queuedMotorInstructions[motorInstructionIndex] = a1;
-				motorInstructionIndex++;
+				xQueueSend(routingToMotorQueueHandle, &a1, 1000);
+				//queuedMotorInstructions[motorInstructionIndex] = a1;
+				//motorInstructionIndex++;
 
 				// Move forward
 				a2.action_type = FORWARDS;
 				a2.magnitude = abs(xMovement);
-				queuedMotorInstructions[motorInstructionIndex] = a2;
-				motorInstructionIndex++;
+				xQueueSend(routingToMotorQueueHandle, &a2, 1000);
+				//queuedMotorInstructions[motorInstructionIndex] = a2;
+				//motorInstructionIndex++;
 
 				// Rotate left 90 degrees
 				a3.action_type = ANTICLOCKWISE;
 				a3.magnitude = 90;
-				queuedMotorInstructions[motorInstructionIndex] = a3;
-				motorInstructionIndex++;
+				xQueueSend(routingToMotorQueueHandle, &a3, 1000);
+				//queuedMotorInstructions[motorInstructionIndex] = a3;
+				//motorInstructionIndex++;
 
 			}else if(xMovement < 0){
 				// Rotate left 90 degrees
 				a1.action_type = ANTICLOCKWISE;
 				a1.magnitude = 90;
-				queuedMotorInstructions[motorInstructionIndex] = a1;
-				motorInstructionIndex++;
+				xQueueSend(routingToMotorQueueHandle, &a1, 1000);
+				//queuedMotorInstructions[motorInstructionIndex] = a1;
+				//motorInstructionIndex++;
 
 				// Move forward
 				a2.action_type = FORWARDS;
 				a2.magnitude = abs(xMovement);
-				queuedMotorInstructions[motorInstructionIndex] = a2;
-				motorInstructionIndex++;
+				xQueueSend(routingToMotorQueueHandle, &a2, 1000);
+				//queuedMotorInstructions[motorInstructionIndex] = a2;
+				//motorInstructionIndex++;
 
 				// Rotate right 90 degrees
 				a3.action_type = CLOCKWISE;
 				a3.magnitude = 90;
-				queuedMotorInstructions[motorInstructionIndex] = a3;
-				motorInstructionIndex++;
+				xQueueSend(routingToMotorQueueHandle, &a3, 1000);
+				//queuedMotorInstructions[motorInstructionIndex] = a3;
+				//motorInstructionIndex++;
 			}else{
 				// No X Movement
 				a1.action_type = NA;
 				a1.magnitude = 0;
-				queuedMotorInstructions[motorInstructionIndex] = a1;
+				xQueueSend(routingToMotorQueueHandle, &a1, 1000);
+				//queuedMotorInstructions[motorInstructionIndex] = a1;
+				//motorInstructionIndex++;
 
 				a2.action_type = NA;
 				a2.magnitude = 0;
-				queuedMotorInstructions[motorInstructionIndex] = a2;
+				xQueueSend(routingToMotorQueueHandle, &a2, 1000);
+				//queuedMotorInstructions[motorInstructionIndex] = a2;
+				//motorInstructionIndex++;
 
 				a3.action_type = NA;
 				a3.magnitude = 0;
-				queuedMotorInstructions[motorInstructionIndex] = a3;
+				xQueueSend(routingToMotorQueueHandle, &a3, 1000);
+				//queuedMotorInstructions[motorInstructionIndex] = a3;
+				//motorInstructionIndex++;
 			}
 
 			if(yMovement > 0){
 				// Move forward
 				a4.action_type = FORWARDS;
 				a4.magnitude = abs(yMovement);
-				queuedMotorInstructions[motorInstructionIndex] = a4;
-				motorInstructionIndex++;
+				xQueueSend(routingToMotorQueueHandle, &a4, 1000);
+				//queuedMotorInstructions[motorInstructionIndex] = a4;
+				//motorInstructionIndex++;
 
 			}else if(yMovement < 0){
 				// Move backwards
 				a4.action_type = BACKWARDS;
 				a4.magnitude = abs(yMovement);
-				queuedMotorInstructions[motorInstructionIndex] = a4;
-				motorInstructionIndex++;
+				xQueueSend(routingToMotorQueueHandle, &a4, 1000);
+				//queuedMotorInstructions[motorInstructionIndex] = a4;
+				//motorInstructionIndex++;
 			}else{
 				a4.action_type = NA;
 				a4.magnitude = 0;
-				queuedMotorInstructions[motorInstructionIndex] = a4;
+				xQueueSend(routingToMotorQueueHandle, &a4, 1000);
+				//queuedMotorInstructions[motorInstructionIndex] = a4;
+				//motorInstructionIndex++;
 			}
 
 			// Clear the joystick movement queue
-            for(i = 0; i < 20; i++){
-            	joystickCommands[i] = NONE;
-            }
-
-            joystickIndex = 0; // Reset
+			//for(i = 0; i < 20; i++){
+			//	joystickCommands[i] = NONE;
+			//}
 
 			currentState = MOTOR;
 			motorInstructionIndex = 0; // Reset the index for the motor control task
@@ -688,6 +668,8 @@ static void MotorControlTask(void *pvParameters)
 
 	uint8_t distance;
 
+	struct motorInstruction mi;
+
 	for(;;)
 	{
 		if(currentState == MOTOR){
@@ -695,50 +677,95 @@ static void MotorControlTask(void *pvParameters)
 			DFR_IncGear();
 			DFR_IncGear();
 			// Move onto next action
-			switch(queuedMotorInstructions[motorInstructionIndex].action_type){
-				case FORWARDS:
-					DFR_DriveForward(movementSpeed);
-					// Set left and right wheel magnitude for a given action
-					DFR_SetRightWheelDestination(queuedMotorInstructions[motorInstructionIndex].magnitude);
-					DFR_SetLeftWheelDestination(queuedMotorInstructions[motorInstructionIndex].magnitude);
-					currentState = ENCODER;
-					break;
-				case BACKWARDS:
-					DFR_DriveBackward(movementSpeed);
-					DFR_SetRightWheelDestination(queuedMotorInstructions[motorInstructionIndex].magnitude);
-					DFR_SetLeftWheelDestination(queuedMotorInstructions[motorInstructionIndex].magnitude);
-					currentState = ENCODER;
-					break;
-				case CLOCKWISE:
-					DFR_DriveRight(movementSpeed);
-					// If the magnitude is, for example, 90 degrees, this will correspond to a wheel destination of
-					distance = queuedMotorInstructions[motorInstructionIndex].magnitude / 22.5;
-					DFR_SetRightWheelDestination(distance);
-					DFR_SetLeftWheelDestination(distance);
-					currentState = ENCODER;
-					break;
-				case ANTICLOCKWISE:
-					DFR_DriveLeft(movementSpeed);
-					distance = queuedMotorInstructions[motorInstructionIndex].magnitude / 22.5;
-					DFR_SetRightWheelDestination(distance);
-					DFR_SetLeftWheelDestination(distance);
-					currentState = ENCODER;
-					break;
-				case NA:
-					// Go onto the next one
-					motorInstructionIndex++;
-					if(motorInstructionIndex == 4){
-						currentState = JOYSTICK;
-					}else{
-						currentState = MOTOR;
-					}
-					break;
+			if(xQueueReceive(routingToMotorQueueHandle, &mi, 10)){
+				//switch(queuedMotorInstructions[motorInstructionIndex].action_type){
+				switch(mi.action_type){
+					case FORWARDS:
+						DFR_DriveForward(movementSpeed);
+						// Set left and right wheel magnitude for a given action
+						//DFR_SetRightWheelDestination(queuedMotorInstructions[motorInstructionIndex].magnitude);
+						//DFR_SetLeftWheelDestination(queuedMotorInstructions[motorInstructionIndex].magnitude);
+						DFR_SetRightWheelDestination(mi.magnitude);
+						DFR_SetLeftWheelDestination(mi.magnitude);
+						currentState = ENCODER;
+						break;
+					case BACKWARDS:
+						DFR_DriveBackward(movementSpeed);
+						//DFR_SetRightWheelDestination(queuedMotorInstructions[motorInstructionIndex].magnitude);
+						//DFR_SetLeftWheelDestination(queuedMotorInstructions[motorInstructionIndex].magnitude);
+						DFR_SetRightWheelDestination(mi.magnitude);
+						DFR_SetLeftWheelDestination(mi.magnitude);
+						currentState = ENCODER;
+						break;
+					case CLOCKWISE:
+						DFR_DriveRight(movementSpeed);
+						// If the magnitude is, for example, 90 degrees, this will correspond to a wheel destination of
+						//distance = queuedMotorInstructions[motorInstructionIndex].magnitude / 22.5;
+						distance = mi.magnitude / 22.5;
+						DFR_SetRightWheelDestination(distance);
+						DFR_SetLeftWheelDestination(distance);
+						currentState = ENCODER;
+						break;
+					case ANTICLOCKWISE:
+						DFR_DriveLeft(movementSpeed);
+						//distance = queuedMotorInstructions[motorInstructionIndex].magnitude / 22.5;
+						distance = mi.magnitude / 22.5;
+						DFR_SetRightWheelDestination(distance);
+						DFR_SetLeftWheelDestination(distance);
+						currentState = ENCODER;
+						break;
+					case NA:
+						// Go onto the next one
+						motorInstructionIndex++;
+						if(motorInstructionIndex == 4){
+							currentState = JOYSTICK;
+						}else{
+							currentState = MOTOR;
+						}
+						break;
+				}
 			}
 		}
 
 		vTaskDelay(TaskPeriodms);
 	}
 }
+
+
+
+// (queue handle, item we want queued (by pointer) rtos copies data from pointer, how many tick we're going to wait)
+// if queue is full wait 1000ms, if it is still full then status returned will be FALSE
+// NB -- if the receive task is higher priority than the send task, it will execute this directly after
+// long send = xQueueSend(QueueHandle, &item, 1000)
+// ie before 		if (send){}
+// timeout after 1000 ticks if queue is empty
+
+
+//long send = xQueueSend(QueueHandle, &item, 1000)
+// if send is TRUE do something
+//if (send){
+//else
+//}
+
+// (queue handle, pointer to item to receive, how long to wait
+// if there is an item in the queue deque it and do something
+// NB -- if the receive task is higher priority than the send task, it will execute this directly after
+// long send = xQueueSend(QueueHandle, &item, 1000)
+// ie before 		if (send){}
+//if (xQueueReceive(QueueHandle, &item, 1000)){
+
+//}
+
+// failed to receive an item within 1000 ticks
+// xQueueReceive tells free RTOS we are willing to wait 1000 ticks
+// if we dont get anything we will end up in this else
+// if there is something in the queue this will never happen
+// we immediately get the item
+// timeout after 1000 ticks if queue is empty
+//else{
+
+//}
+
 
 
 
@@ -775,8 +802,8 @@ int main(void)
 	DFR_RobotInit();
 
 	// Port 0
-	// Joystick DOWN P0[15] | Joystick RIGHT P0[16] | Joystick CENTER P0[17]
-	GPIO_IntCmd(0, 1 << 15 | 1 << 16 | 1 << 17, 0);
+	// Left switch | Joystick DOWN P0[15] | Joystick RIGHT P0[16] | Joystick CENTER P0[17]
+	GPIO_IntCmd(0, 1 << 4 | 1 << 15 | 1 << 16 | 1 << 17, 0);
 
 	// Port 2
 	// Joystick UP P2[3] | Joystick LEFT P2[4] | Encoder(Left) | Encoder(Right)
@@ -788,6 +815,12 @@ int main(void)
 	// create mutex semaphore -- has to give the semaphore back after it is taken for it to be used elsewhere
 	//SPISemaphore = xSemaphoreCreateMutex();
 	SPISemaphore = xSemaphoreCreateRecursiveMutex();
+
+	//(queue length ie, how many items you can send to the queue before xQueueSend gives a FALSE return, size of one item)
+	joystickToRoutingQueueHandle = xQueueCreate(20, sizeof(int));  // create a queue handle to send items to the queue
+
+	struct motorInstruction ref;
+	routingToMotorQueueHandle = xQueueCreate(4, sizeof(ref));
 
 	// Create a software timer
 	SoftwareTimer = xTimerCreate((const int8_t*)"TIMER",   // Just a text name to associate with the timer, useful for debugging, but not used by the kernel.
@@ -812,7 +845,7 @@ int main(void)
 	xTaskCreate(OLEDTask3, 			(const int8_t* const)"OLED3", 		configMINIMAL_STACK_SIZE*2, NULL, 3U, NULL);
 	xTaskCreate(OLEDTask4, 			(const int8_t* const)"OLED4", 		configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
 	xTaskCreate(OLEDTask5, 			(const int8_t* const)"OLED5", 		configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
-	xTaskCreate(TuneTask,  			(const int8_t* const)"TUNE",  		configMINIMAL_STACK_SIZE*2, NULL, 6U, NULL);
+	xTaskCreate(TuneTask,  			(const int8_t* const)"TUNE",  		configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
 
 	// Create the tasks we made
 	//xTaskCreate(JoystickTask,  		(const int8_t* const)"JoyStick",  			configMINIMAL_STACK_SIZE*2, NULL, 0U, NULL);
@@ -847,6 +880,13 @@ int main(void)
  *****************************************************************************/
 void EINT3_IRQHandler (void)
 {
+	int fd = FORWARDS;
+	int bd = BACKWARDS;
+	int lt = LEFT;
+	int rt = RIGHT;
+	// Initialise them all to NONE. If NONE isn't a movement type, the array will be initialised to all LEFT movements
+	//enum movements joystickCommands[20] = {NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE,NONE};
+
 	if(currentState == ENCODER){
 		// Encoder input 1 (Left)
 		if ((((LPC_GPIOINT->IO2IntStatR) >> 11)& 0x1) == ENABLE)
@@ -876,25 +916,27 @@ void EINT3_IRQHandler (void)
 
 	if(currentState == JOYSTICK){
 
+		PutStringOLED((uint8_t*)"X: " + gridLocation[0] + "Y:" + gridLocation[1], 5);
+
 		// Joystick Up
 		if ((((LPC_GPIOINT->IO2IntStatR) >> 3)& 0x1) == ENABLE){
-			joystickCommands[joystickIndex] = FORWARDS;
-			joystickIndex++;
+			//joystickCommands[joystickIndex] = FORWARDS;
+			xQueueSend(joystickToRoutingQueueHandle, &fd, 1000);
 
 		// Joystick Down
 		}else if ((((LPC_GPIOINT->IO0IntStatR) >> 15)& 0x1) == ENABLE){
-			joystickCommands[joystickIndex] = BACKWARDS;
-			joystickIndex++;
+			//joystickCommands[joystickIndex] = BACKWARDS;
+			xQueueSend(joystickToRoutingQueueHandle, &bd, 1000);
 
 		// Joystick Left
 		}else if ((((LPC_GPIOINT->IO2IntStatR) >> 4)& 0x1) == ENABLE){
-			joystickCommands[joystickIndex] = LEFT;
-			joystickIndex++;
+			//joystickCommands[joystickIndex] = LEFT;
+			xQueueSend(joystickToRoutingQueueHandle, &lt, 1000);
 
 		// Joystick Right
 		}else if ((((LPC_GPIOINT->IO0IntStatR) >> 16)& 0x1) == ENABLE){
-			joystickCommands[joystickIndex] = RIGHT;
-			joystickIndex++;
+			//joystickCommands[joystickIndex] = RIGHT;
+			xQueueSend(joystickToRoutingQueueHandle, &rt, 1000);
 
 		// Joystick Center
 		}else if ((((LPC_GPIOINT->IO0IntStatR) >> 17)& 0x1) == ENABLE){
@@ -904,9 +946,14 @@ void EINT3_IRQHandler (void)
 
 	}
 
+	// Left button
+	if ((((LPC_GPIOINT->IO0IntStatR) >> 4)& 0x1) == ENABLE){
+		togglePauseSong();
+	}
+
 	// Port 0
-	// Joystick DOWN | Joystick RIGHT | Joystick CENTER
-    GPIO_ClearInt(0, 1 << 15 | 1 << 16 | 1 << 17);
+	// Left switch | Joystick DOWN | Joystick RIGHT | Joystick CENTER
+    GPIO_ClearInt(0, 1 << 4 | 1 << 15 | 1 << 16 | 1 << 17);
 
     // Port 2
     // Joystick UP | Encoder(Left) | Encoder(Right) | Joystick LEFT
