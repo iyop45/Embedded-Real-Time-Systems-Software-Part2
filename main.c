@@ -235,6 +235,8 @@ static void OLEDTask1(void *pvParameters)
 		PutStringOLED((uint8_t*)"", 2);
 		vTaskDelayUntil(&LastExecutionTime, TaskPeriodms);
 		*/
+
+
 	}
 }
 
@@ -353,7 +355,7 @@ static void OLEDTask4(void *pvParameters)
 			PutStringOLED((uint8_t*)Buffer, 3);
 		}
 
-		vTaskDelay(TaskPeriodms*15);
+		vTaskDelay(TaskPeriodms);
 
 		/*_
 		if (Up)
@@ -622,7 +624,7 @@ static void RoutingTask(void *pvParameters)
 		}
 
 		// Delay the for loop
-		vTaskDelay(TaskPeriodms); //10ms
+		vTaskDelay(TaskPeriodms*2); //10ms
 	}
 }
 
@@ -949,7 +951,7 @@ void EINT3_IRQHandler (void)
 	for(k = 0; k < 17; k++){
 		Buffy[k] = ' ';
 	}
-	sprintf(Buffy, "X: %d Y: %d         ", (int)gridLocation[0], gridLocation[1]);
+	sprintf(Buffy, "X: %d Y: %d      ", (int)gridLocation[0], gridLocation[1]);
 	PutStringOLED((uint8_t*)Buffy, 5);
 	//for(k = 0; k < 17; k++){
 	//	Buffy[k] = ' ';
@@ -959,7 +961,7 @@ void EINT3_IRQHandler (void)
 	if ((((LPC_GPIOINT->IO0IntStatR) >> 4)& 0x1) == ENABLE){
 		togglePauseSong();
 		if(getIsPaused() == 1){
-			PutStringOLED((uint8_t*)" Tune: Paused  ", 4);
+			PutStringOLED((uint8_t*)" Tune: Paused   ", 4);
 		}else{
 			PutStringOLED((uint8_t*)" Tune: Playing  ", 4);
 		}
